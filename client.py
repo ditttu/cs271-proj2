@@ -47,9 +47,13 @@ def handle_input(x, data):
 
 def snapshot():
 
+# Called after receiving the first marker during a snapshot.
 def snapshot_initiate(x, data):
+    time.sleep(constants.MESSAGE_DELAY)
 
+# Called after receiving any subsequent marker during a snapshot.
 def snapshot_continue(x, data):
+    time.sleep(constants.MESSAGE_DELAY)
 
 def token(token_string):
 
