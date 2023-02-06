@@ -6,7 +6,7 @@ import time
 
 import constants
 
-index = int(sys.argv[1])
+index = int(sys.argv[1]) # Client ID in range(5)
 port = constants.CLIENT_PORT_PREFIX + index
 soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 soc.setblocking(False)
@@ -47,9 +47,13 @@ def handle_input(x, data):
 
 def snapshot():
 
+# Called after receiving the first marker during a snapshot.
 def snapshot_initiate(x, data):
+    time.sleep(constants.MESSAGE_DELAY)
 
+# Called after receiving any subsequent marker during a snapshot.
 def snapshot_continue(x, data):
+    time.sleep(constants.MESSAGE_DELAY)
 
 def token(token_string):
 
@@ -79,9 +83,9 @@ while run:
             # "ss {#client_num} {#initial_client_num} {#snapshot_id}"
             # "t {token_string}"
             data = x.recv(1024).decode().split()
-            #record message all current channels: append to dictionary
+            # record message all current channels: append to dictionary
             if data[0] == "ss":
-                if snapshot_dict.has_key((data[2],data[3])) == True:
+                if snapshot_dict.has_key((data[2],data[3])):
                     thread = threading.Thread(target=snapshot_continue, args=(x, data,), daemon=True)
                     thread.start()
                 else:
