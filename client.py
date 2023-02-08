@@ -25,6 +25,7 @@ run = 1
 snapshot_dict = {}
 current_requests_channel  = {}
 has_token = False # current state of the client
+token_string = "" # current state of the client
 prob = 0
 
 def record_current_state():
@@ -34,24 +35,35 @@ def record_current_state():
 
 
 def snapshot():
-    return # to be filled
+    global snapshot_dict
+    snapshot_dict[self_id] = SnapshotState(self_id)
+    #TODO: implement snapshot id
+    data = ["ss",str(self_id),str(self_id),str(0)]
+    for i in constants.CONNECTION_GRAPH[self_id]:
+        soc_send[i].sendall(' '.join(data).encode())
+        print("Sent snapshot marker to {}".format(i))
 
 # Object that keeps the state of a snapshot
 class SnapshotState:
-    def __init__(self, snapshot_tag, state):
+    def __init__(self, snapshot_tag):
         self.snapshot_tag = snapshot_tag
-        self.incoming_channels = [] # state of incoming channels
+        if has_token:
+            self.state = token_string
+        else:
+            self.state = ""
+        self.incoming_channels = {key: [] for key in constants.INCOMING_GRAPH[self_id]} # state of incoming channels
+        self.record_channels = {key: True for key in constants.INCOMING_GRAPH[self_id]} # currently recoding incoming channels
 
 # Called after receiving the first marker during a snapshot.
 def snapshot_initiate(x, data):
     state = record_current_state()
     global snapshot_dict
-    time.sleep(constants.MESSAGE_DELAY)
     sender_id, initiator_id, snapshot_id = data[1:4]
     snapshot_tag = (initiator_id, snapshot_id)
     if snapshot_dict.has_key(snapshot_tag): 
         enter_error('snapshot_initiate called for already initiated snapshot.')
     snapshot_dict[snapshot_tag] = SnapshotState(snapshot_tag, has_token)
+    time.sleep(constants.MESSAGE_DELAY)
 
 # Called after receiving any subsequent marker during a snapshot.
 def snapshot_continue(x, data):
@@ -140,3 +152,4 @@ def enter_log(string):
     
 def enter_error(string):
     print(f'ERROR: {string}')
+    
