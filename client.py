@@ -3,6 +3,7 @@ import select
 import sys
 import threading
 import time
+import random
 
 import constants
 
@@ -15,41 +16,22 @@ soc_send = []
 for i in range(constants.NUM_CLIENT):
     temp_soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     soc_send.append(temp_soc)
+soc.bind((constants.HOST,port))
 
 soc.listen(constants.NUM_CLIENT)
 inputSockets = [soc.fileno(), sys.stdin.fileno()]
-address_list = []
 send_list = []
 run = 1
 snapshot_dict = {}
 current_requests_channel  = {}
 has_token = False # current state of the client
+prob = 0
 
 def record_current_state():
     current_state = has_token
     enter_log(f'Recording current state: has_token = {has_token}')
     return current_state
 
-
-def handle_input(x, data):
-    global lamport
-    if data:
-        if data[0] == "t":
-            if(int(data[4])>lamport):
-                lamport = int(data[4])
-            lamport = lamport+1
-            message = "reply "+str(lamport)
-            x.send(message.encode())
-            lamport = lamport+1
-        else:
-            if(int(data[5])>lamport):
-                lamport = int(data[5])
-            lamport = lamport+1
-            chain.release([data[4],data[2],data[3]])
-            x.send("reply 0".encode())
-    else:
-        x.close()
-        inputSockets.remove(x)
 
 def snapshot():
     return # to be filled
@@ -59,7 +41,6 @@ class SnapshotState:
     def __init__(self, snapshot_tag, state):
         self.snapshot_tag = snapshot_tag
         self.incoming_channels = [] # state of incoming channels
-        self.outgoing_channels = [] # state of outgoing channels
 
 # Called after receiving the first marker during a snapshot.
 def snapshot_initiate(x, data):
@@ -78,8 +59,32 @@ def snapshot_continue(x, data):
     time.sleep(constants.MESSAGE_DELAY)
 
 def token(token_string):
+    print("initiated token {}".format(token_string))
+    token_list = ["Token", token_string]
+    handle_token(token_list)
 
+#connect to all clients
 def initiate():
+    for i in range(constants.NUM_CLIENT):
+        if i != self_id:
+            soc_send[i].connect((constants.HOST, constants.CLIENT_PORT_PREFIX+i))
+            soc_send[i].sendall("Connection request from {}".format(self_id).encode())
+            received = soc_send[i].recv(1024)
+            print(received)
+
+#pass token
+def handle_token(data):
+    global has_token
+    #TODO: update token on incoming channels
+    time.sleep(constants.MESSAGE_DELAY)
+    fail = random.choices([True,False],weights = (prob,1-prob), k=1)
+    if fail[0]:
+        print(' '.join(data) + " lost")
+    else:
+        next = random.choice(constants.CONNECTION_GRAPH[self_id])
+        print("Sending token to {}".format(next))
+        soc_send[next].sendall(' '.join(data).encode())
+    has_token = False
 
 while run:
     inputready, outputready, exceptready = select.select(inputSockets, [], [])
@@ -87,7 +92,6 @@ while run:
     for x in inputready:
         if x == soc.fileno():
             client, address = soc.accept()
-            address_list.append(address)
             inputSockets.append(client)
         elif x == sys.stdin.fileno():
             request = sys.stdin.readline().split()
@@ -99,8 +103,11 @@ while run:
                 thread = threading.Thread(target=snapshot, daemon=True)
                 thread.start()
             if request[0] == "token":
-                thread = threading.Thread(target=token, arg=(request[1],), daemon=True)
+                thread = threading.Thread(target=token, args=(request[1],), daemon=True)
                 thread.start()
+            if request[0] == "prob":
+                prob = float(request[1])
+                print("Updated failure probability to {}".format(prob))
         else:
             # "ss {#client_num} {#initial_client_num} {#snapshot_id}"
             # "t {token_string}"
@@ -114,10 +121,18 @@ while run:
                 else:
                     thread = threading.Thread(target=snapshot_initiate, args=(x, data,), daemon=True)
                     thread.start()
+            elif data[0] == "Connection":
+                print(' '.join(data))
+                x.send("Successfully connected to {}".format(self_id).encode())
+            elif data[0] == "Token":
+                print("Recieved "+' '.join(data))
+                has_token = True
+                thread = threading.Thread(target=handle_token, args=(data,), daemon=True)
+                thread.start()
             else:
+                break
 
 
-soc.close()
 
 # UI methods
 def enter_log(string):
