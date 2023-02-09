@@ -31,12 +31,6 @@ prob = 0 # probability of losing the token before receiving it
 snapshot_counter = 0
 local_snapshots = {}
 
-#TODO: Check if needed
-# def record_current_state():
-#     current_state = has_token
-#     enter_log(f'Recording current state: has_token = {has_token}')
-#     return current_state
-
 
 def snapshot():
     global snapshot_dict
@@ -47,11 +41,11 @@ def snapshot():
     if snapshot_tag in local_snapshots:
         enter_error('snapshot already started')
     local_snapshots[snapshot_tag] = {}
-    snapshot_counter += 1
-    data = ["ss",str(self_id),str(self_id),str(0)]
+    data = ["ss",str(self_id),str(self_id),str(snapshot_counter)]
     for i in constants.CONNECTION_GRAPH[self_id]:
         soc_send[i].sendall(' '.join(data).encode())
         print("Sent snapshot {} marker to {}".format(data, i))
+    snapshot_counter += 1
 
 # Object that keeps the state of a snapshot
 class SnapshotState:
