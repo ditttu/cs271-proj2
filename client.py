@@ -26,7 +26,8 @@ snapshot_dict = {}
 current_requests_channel  = {}
 has_token = False # current state of the client
 token_string = "" # current state of the client
-prob = 0
+prob = 0 # probability of losing the token before receiving it
+snapshot_counter = 1
 
 #TODO: Check if needed
 # def record_current_state():
@@ -37,8 +38,10 @@ prob = 0
 
 def snapshot():
     global snapshot_dict
+    global snapshot_counter
     #TODO: implement snapshot id
-    snapshot_dict[(self_id,0)] = SnapshotState((self_id,0))
+    snapshot_dict[(self_id,snapshot_counter)] = SnapshotState((self_id,snapshot_counter))
+    snapshot_counter += 1
     data = ["ss",str(self_id),str(self_id),str(0)]
     for i in constants.CONNECTION_GRAPH[self_id]:
         soc_send[i].sendall(' '.join(data).encode())
