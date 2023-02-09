@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import random
+import json
 
 import constants
 
@@ -28,6 +29,7 @@ has_token = False # current state of the client
 token_string = "" # current state of the client
 prob = 0 # probability of losing the token before receiving it
 snapshot_counter = 0
+local_snapshots = {}
 
 #TODO: Check if needed
 # def record_current_state():
@@ -39,8 +41,12 @@ snapshot_counter = 0
 def snapshot():
     global snapshot_dict
     global snapshot_counter
-    #TODO: implement snapshot id
-    snapshot_dict[(self_id,snapshot_counter)] = SnapshotState((self_id,snapshot_counter))
+    global local_snapshots
+    snapshot_tag = (self_id,snapshot_counter)
+    snapshot_dict[snapshot_tag] = SnapshotState(snapshot_tag)
+    if snapshot_tag in local_snapshots:
+        enter_error('snapshot already started')
+    local_snapshots[snapshot_tag] = {}
     snapshot_counter += 1
     data = ["ss",str(self_id),str(self_id),str(0)]
     for i in constants.CONNECTION_GRAPH[self_id]:
@@ -62,7 +68,9 @@ class SnapshotState:
         print("SS state: {}".format(self.state))
         print("SS incoming channels: {}".format(self.incoming_channels))
         print("SS record channels: {}".format(self.record_channels))
-
+    def to_string(self):
+        json_obj = json.dumps(self)
+        return json_obj
 # Called after receiving the first marker during a snapshot.
 def snapshot_initiate(data):
     global snapshot_dict
@@ -70,6 +78,7 @@ def snapshot_initiate(data):
     snapshot_tag = (int(initiator_id), int(snapshot_id))
     if snapshot_tag in snapshot_dict: 
         enter_error('snapshot_initiate called for already initiated snapshot.')
+    print(f'Recording for snapshot {snapshot_tag} started.')
     snapshot_dict[snapshot_tag] = SnapshotState(snapshot_tag)
     snapshot_dict[snapshot_tag].record_channels[str(sender_id)] = False
     time.sleep(constants.MESSAGE_DELAY)
@@ -77,6 +86,8 @@ def snapshot_initiate(data):
     for i in constants.CONNECTION_GRAPH[self_id]:
         soc_send[i].sendall(' '.join(data).encode())
         print("Sent snapshot {} marker to {}".format(data,i))
+    check_completion(snapshot_tag) # check if snapshot is complete
+
 
 # Called after receiving any subsequent marker during a snapshot.
 def snapshot_continue(data):
@@ -86,8 +97,20 @@ def snapshot_continue(data):
     if snapshot_tag not in snapshot_dict: 
         enter_error('snapshot_continue called for uninitiated snapshot.')
     snapshot_dict[snapshot_tag].record_channels[str(sender_id)] = False
-    #TODO: Check if snapshot complete
-    
+    check_completion(snapshot_tag) # check if snapshot is complete
+
+def check_completion(snapshot_tag):
+    global snapshot_dict
+    initiator_id = snapshot_tag[0]
+    snapshot_completed = snapshot_dict[snapshot_tag].is_complete()
+    if snapshot_completed:
+        print(f'Recording for snapshot {snapshot_tag} completed.')
+        if initiator_id == self_id:
+            local_snapshots[snapshot_tag][self_id] = snapshot_dict[snapshot_tag]
+        else:
+            message = "snapshot " + str(self_id) + ' ' + snapshot_dict[snapshot_tag].to_string()
+            soc_send[initiator_id].sendall(message.encode())
+            snapshot_dict.pop(snapshot_tag)
 
 def token(token_string):
     print("initiated token {}".format(token_string))
@@ -131,10 +154,10 @@ while run:
     inputready, outputready, exceptready = select.select(inputSockets, [], [])
 
     for x in inputready:
-        if x == soc.fileno():
+        if x == soc.fileno(): # input received via keyboard
             client, address = soc.accept()
             inputSockets.append(client)
-        elif x == sys.stdin.fileno():
+        elif x == sys.stdin.fileno(): # input received via keyboard
             request = sys.stdin.readline().split()
             if request[0] == "exit":
                 run = 0
@@ -152,34 +175,46 @@ while run:
             if request[0] == "print":
                 thread = threading.Thread(target=print_all, daemon=True)
                 thread.start()
-        else:
+        else:   # data received from socket
             # "ss {#client_num} {#initial_client_num} {#snapshot_id}"
             # "t {token_string}"
-            data = x.recv(1024).decode().split()
-            # record message all current channels: append to dictionary
-            if data[0] == "ss":
-                snapshot_tag = (int(data[2]),int(data[3]))
-                if snapshot_tag in snapshot_dict:
-                    thread = threading.Thread(target=snapshot_continue, args=(data,), daemon=True)
+            msg = x.recv(1024).decode()
+
+            if len(msg) >= 8 and msg[:8] == 'snapshot': # completed snapshot
+                client_id = int(msg[9])
+                json_obj = msg[11:]
+                snapshot_state = json.loads(json_obj)
+                snapshot_tag = snapshot_state.snapshot_tag
+                local_snapshots[snapshot_tag][client_id] = snapshot_state
+
+            else:
+                data = msg.split()
+                # record message all current channels: append to dictionary
+                if data[0] == "ss": # snapshot marker
+                    snapshot_tag = (data[2],data[3])
+                    if snapshot_dict.has_key(snapshot_tag):
+                        thread = threading.Thread(target=snapshot_continue, args=(data,), daemon=True)
+                        thread.start()
+                    else:
+                        thread = threading.Thread(target=snapshot_initiate, args=(data,), daemon=True)
+                        thread.start()
+                elif data[0] == "Connection": # socket connection
+                    print(' '.join(data))
+                    x.send("Successfully connected to {}".format(self_id).encode())
+                elif data[0] == "Token": # token
+                    print("Received "+' '.join(data))
+                    has_token = True
+                    thread = threading.Thread(target=handle_token, args=(data,), daemon=True)
                     thread.start()
                 else:
-                    thread = threading.Thread(target=snapshot_initiate, args=(data,), daemon=True)
-                    thread.start()
-            elif data[0] == "Connection":
-                print(' '.join(data))
-                x.send("Successfully connected to {}".format(self_id).encode())
-            elif data[0] == "Token":
-                print("Recieved "+' '.join(data))
-                thread = threading.Thread(target=handle_token, args=(data,), daemon=True)
-                thread.start()
-            else:
-                break
+                    enter_error('Received message that is incorrectly formatted.')
+                    break
 
 
 
 # UI methods
-def enter_log(string):
-    print(string)
+# def enter_log(string):
+#     print(string)
     
 def enter_error(string):
     print(f'ERROR: {string}')
