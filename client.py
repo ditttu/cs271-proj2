@@ -27,7 +27,7 @@ current_requests_channel  = {}
 has_token = False # current state of the client
 token_string = "" # current state of the client
 prob = 0 # probability of losing the token before receiving it
-snapshot_counter = 1
+snapshot_counter = 0
 
 #TODO: Check if needed
 # def record_current_state():
@@ -55,20 +55,25 @@ class SnapshotState:
             self.state = token_string
         else:
             self.state = ""
-        self.incoming_channels = {key: [] for key in constants.INCOMING_GRAPH[self_id]} # state of incoming channels
-        self.record_channels = {key: True for key in constants.INCOMING_GRAPH[self_id]} # currently recoding incoming channels
+        self.incoming_channels = {str(key): [] for key in constants.INCOMING_GRAPH[self_id]} # state of incoming channels
+        self.record_channels = {str(key): True for key in constants.INCOMING_GRAPH[self_id]} # currently recoding incoming channels
+    def print_ss(self):
+        print("SS tag: {}".format(self.snapshot_tag))
+        print("SS state: {}".format(self.state))
+        print("SS incoming channels: {}".format(self.incoming_channels))
+        print("SS record channels: {}".format(self.record_channels))
 
 # Called after receiving the first marker during a snapshot.
 def snapshot_initiate(data):
     global snapshot_dict
     sender_id, initiator_id, snapshot_id = data[1:4]
-    snapshot_tag = (initiator_id, snapshot_id)
-    if snapshot_dict.has_key(snapshot_tag): 
+    snapshot_tag = (int(initiator_id), int(snapshot_id))
+    if snapshot_tag in snapshot_dict: 
         enter_error('snapshot_initiate called for already initiated snapshot.')
     snapshot_dict[snapshot_tag] = SnapshotState(snapshot_tag)
-    snapshot_dict[snapshot_tag].record_channel[sender_id] = False
+    snapshot_dict[snapshot_tag].record_channels[str(sender_id)] = False
     time.sleep(constants.MESSAGE_DELAY)
-    data[1] = self_id
+    data[1] = str(self_id)
     for i in constants.CONNECTION_GRAPH[self_id]:
         soc_send[i].sendall(' '.join(data).encode())
         print("Sent snapshot {} marker to {}".format(data,i))
@@ -77,16 +82,16 @@ def snapshot_initiate(data):
 def snapshot_continue(data):
     global snapshot_dict
     sender_id, initiator_id, snapshot_id = data[1:4]
-    snapshot_tag = (initiator_id, snapshot_id)
-    if not snapshot_dict.has_key(snapshot_tag): 
+    snapshot_tag = (int(initiator_id), int(snapshot_id))
+    if snapshot_tag not in snapshot_dict: 
         enter_error('snapshot_continue called for uninitiated snapshot.')
-    snapshot_dict[snapshot_tag].record_channel[sender_id] = False
+    snapshot_dict[snapshot_tag].record_channels[str(sender_id)] = False
     #TODO: Check if snapshot complete
     
 
 def token(token_string):
     print("initiated token {}".format(token_string))
-    token_list = ["Token", token_string]
+    token_list = ["Token", token_string, str(self_id)]
     handle_token(token_list)
 
 #connect to all clients
@@ -101,7 +106,12 @@ def initiate():
 #pass token
 def handle_token(data):
     global has_token
-    #TODO: update token on incoming channels
+    global token_string
+    has_token = True
+    token_string = data[1]
+    for key in snapshot_dict:
+        if snapshot_dict[key].record_channels[data[2]]:
+            snapshot_dict[key].incoming_channels[data[2]].append(data)
     time.sleep(constants.MESSAGE_DELAY)
     fail = random.choices([True,False],weights = (prob,1-prob), k=1)
     if fail[0]:
@@ -109,8 +119,13 @@ def handle_token(data):
     else:
         next = random.choice(constants.CONNECTION_GRAPH[self_id])
         print("Sending token to {}".format(next))
+        data[2] = str(self_id)
         soc_send[next].sendall(' '.join(data).encode())
     has_token = False
+
+def print_all():
+    for key in snapshot_dict:
+        snapshot_dict[key].print_ss()
 
 while run:
     inputready, outputready, exceptready = select.select(inputSockets, [], [])
@@ -134,14 +149,17 @@ while run:
             if request[0] == "prob":
                 prob = float(request[1])
                 print("Updated failure probability to {}".format(prob))
+            if request[0] == "print":
+                thread = threading.Thread(target=print_all, daemon=True)
+                thread.start()
         else:
             # "ss {#client_num} {#initial_client_num} {#snapshot_id}"
             # "t {token_string}"
             data = x.recv(1024).decode().split()
             # record message all current channels: append to dictionary
             if data[0] == "ss":
-                snapshot_tag = (data[2],data[3])
-                if snapshot_dict.has_key(snapshot_tag):
+                snapshot_tag = (int(data[2]),int(data[3]))
+                if snapshot_tag in snapshot_dict:
                     thread = threading.Thread(target=snapshot_continue, args=(data,), daemon=True)
                     thread.start()
                 else:
@@ -152,7 +170,6 @@ while run:
                 x.send("Successfully connected to {}".format(self_id).encode())
             elif data[0] == "Token":
                 print("Recieved "+' '.join(data))
-                has_token = True
                 thread = threading.Thread(target=handle_token, args=(data,), daemon=True)
                 thread.start()
             else:
