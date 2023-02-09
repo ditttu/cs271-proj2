@@ -34,6 +34,28 @@ prob = 0 # probability of losing the token before receiving it
 snapshot_counter = 0
 local_snapshots = {}
 
+# send a string over socket via padding
+def padding(length):
+    singlebyte = b'\xff'
+    return bytes.join([singlebyte for i in range(length)])
+
+def header(x):
+    s = str(x)
+    if len(s) > constants.HEADER_SIZE:
+        enter_error('Header too big!')
+    while(len(s) < constants.HEADER_SIZE):
+        s = '0' + s
+    return s.encode()
+
+def send_padded_msg(sock, msg):
+    encoded_msg = msg.encode()
+    num_bytes = len(encoded_msg)
+    header = header(num_bytes)
+    if num_bytes > constants.MESSAGE_SIZE - len(header):
+        enter_error('Message too big!')
+    padding_length = constants.MESSAGE_SIZE - num_bytes - len(header)
+    padded_msg = bytes.join([header, padding(padding_length)])
+    sock.sendall(padded_msg)
 
 def snapshot():
     global snapshot_dict
@@ -46,7 +68,8 @@ def snapshot():
     local_snapshots[snapshot_tag] = {}
     data = ["ss",str(self_id),str(self_id),str(snapshot_counter)]
     for i in constants.CONNECTION_GRAPH[self_id]:
-        soc_send[i].sendall(' '.join(data).encode())
+        send_padded_msg(soc_send[i], ' '.join(data))
+        # soc_send[i].sendall(' '.join(data).encode())
         print("Sent snapshot {} marker to {}".format(data, i))
     snapshot_counter += 1
 
@@ -129,7 +152,7 @@ def initiate():
         if i != self_id:
             soc_send[i].connect((constants.HOST, constants.CLIENT_PORT_PREFIX+i))
             soc_send[i].sendall("Connection request from {}".format(self_id).encode())
-            received = soc_send[i].recv(1024)
+            received = soc_send[i].recv(constants.MESSAGE_SIZE)
             print(received)
 
 #pass token
@@ -190,8 +213,13 @@ while run:
         else:   # data received from socket
             # "ss {#client_num} {#initial_client_num} {#snapshot_id}"
             # "t {token_string}"
-            msg = x.recv(1024).decode()
-            #TODO: pad every send and recieve
+            msg_received = x.recv(constants.MESSAGE_SIZE)
+            if len(msg_received != constants.MESSAGE_SIZE):
+                enter_error('Incorrectly padded message received.')
+            num_bytes = int(msg_received[:constants.HEADER_SIZE].decode())
+            msg = msg_received[constants.HEADER_SIZE:num_bytes-1].decode()
+            # pad every message such that the first constants.HEADER_SIZE bytes is the number of remaining useful bytes,
+            # and it is padded to have constants.MESSAGE_SIZE bytes total. 
 
             if len(msg) >= 8 and msg[:8] == 'snapshot': # completed snapshot
                 client_id = int(msg[9])
