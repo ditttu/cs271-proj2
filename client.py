@@ -9,7 +9,7 @@ import pickle
 import constants
     
 def enter_error(string):
-    print(f'ERROR: {string}')
+    print(f'Warning: {string}')
 
 self_id = int(sys.argv[1]) # Client ID in range(5)
 port = constants.CLIENT_PORT_PREFIX + self_id
@@ -37,9 +37,9 @@ local_snapshots = {}
 # send a string over socket via padding
 def padding(length):
     singlebyte = b'\xff'
-    return bytes.join([singlebyte for i in range(length)])
+    return b''.join([singlebyte for i in range(length)])
 
-def header(x):
+def header_s(x):
     s = str(x)
     if len(s) > constants.HEADER_SIZE:
         enter_error('Header too big!')
@@ -50,11 +50,23 @@ def header(x):
 def send_padded_msg(sock, msg):
     encoded_msg = msg.encode()
     num_bytes = len(encoded_msg)
-    header = header(num_bytes)
+    header = header_s(num_bytes)
     if num_bytes > constants.MESSAGE_SIZE - len(header):
         enter_error('Message too big!')
     padding_length = constants.MESSAGE_SIZE - num_bytes - len(header)
-    padded_msg = bytes.join([header, padding(padding_length)])
+    padded_msg = b''.join([header, encoded_msg, padding(padding_length)])
+    sock.sendall(padded_msg)
+
+def send_padded_msg_ss(sock, msg, snapshot):
+    encoded_msg = msg.encode()
+    num_bytes = len(encoded_msg)
+    num_bytes_ss = len(snapshot)
+    header = header_s(num_bytes)
+    header_ss = header_s(num_bytes_ss)
+    if num_bytes + num_bytes_ss > constants.MESSAGE_SIZE - len(header) - len(header_ss):
+        enter_error('Message too big!')
+    padding_length = constants.MESSAGE_SIZE - num_bytes - num_bytes_ss - len(header) - len(header_ss)
+    padded_msg = b''.join([header, encoded_msg, header_ss, snapshot, padding(padding_length)])
     sock.sendall(padded_msg)
 
 def snapshot():
@@ -105,14 +117,17 @@ def snapshot_initiate(data):
     snapshot_tag = (int(initiator_id), int(snapshot_id))
     if snapshot_tag in snapshot_dict: 
         enter_error('snapshot_initiate called for already initiated snapshot.')
-    print(f'Recording for snapshot {snapshot_tag} started.')
-    snapshot_dict[snapshot_tag] = SnapshotState(snapshot_tag)
-    snapshot_dict[snapshot_tag].record_channels[str(sender_id)] = False
-    data[1] = str(self_id)
-    for i in constants.CONNECTION_GRAPH[self_id]:
-        soc_send[i].sendall(' '.join(data).encode())
-        print("Sent snapshot {} marker to {}".format(data,i))
-    check_completion(snapshot_tag) # check if snapshot is complete
+        snapshot_continue(data)
+    else:
+        print(f'Recording for snapshot {snapshot_tag} started.')
+        snapshot_dict[snapshot_tag] = SnapshotState(snapshot_tag)
+        data[1] = str(self_id)
+        for i in constants.CONNECTION_GRAPH[self_id]:
+            send_padded_msg(soc_send[i],' '.join(data))
+            # soc_send[i].sendall(' '.join(data).encode())
+            print("Sent snapshot {} marker to {}".format(data,i))
+        snapshot_dict[snapshot_tag].record_channels[str(sender_id)] = False
+        check_completion(snapshot_tag) # check if snapshot is complete
 
 
 # Called after receiving any subsequent marker during a snapshot.
@@ -134,10 +149,12 @@ def check_completion(snapshot_tag):
         print(f'Recording for snapshot {snapshot_tag} completed.')
         if initiator_id == self_id:
             local_snapshots[snapshot_tag][self_id] = snapshot_dict[snapshot_tag]
+            if len(local_snapshots[snapshot_tag]) == constants.NUM_CLIENT:
+                snapshot_print(snapshot_tag)
         else:
-            #TODO: convert to str/byte before sending
-            message = "snapshot " + str(self_id) + ' ' #+ snapshot_dict[snapshot_tag].to_string()
-            soc_send[initiator_id].sendall(message.encode())
+            message = "snapshot " + str(self_id)
+            snapshot =  snapshot_dict[snapshot_tag].to_string()
+            send_padded_msg_ss(soc_send[initiator_id], message, snapshot)
             # snapshot_dict.pop(snapshot_tag)
         #TODO:Delete from dictionary
 
@@ -151,9 +168,23 @@ def initiate():
     for i in range(constants.NUM_CLIENT):
         if i != self_id:
             soc_send[i].connect((constants.HOST, constants.CLIENT_PORT_PREFIX+i))
-            soc_send[i].sendall("Connection request from {}".format(self_id).encode())
+            send_padded_msg(soc_send[i],"Connection request from {}".format(self_id))
             received = soc_send[i].recv(constants.MESSAGE_SIZE)
             print(received)
+
+def snapshot_print(snapshot_tag):
+    print("Printing snapshot {}:".format(snapshot_tag))
+    for i in local_snapshots[snapshot_tag]:
+        print("Snapshot {} for client {}:".format(snapshot_tag,i))
+        local_snapshots[snapshot_tag][i].print_ss()
+
+def recieved_ss(json_obj,client_id):
+    snapshot_state = pickle.loads(json_obj)
+    # snapshot_state.print_ss()
+    snapshot_tag = snapshot_state.snapshot_tag
+    local_snapshots[snapshot_tag][client_id] = snapshot_state
+    if len(local_snapshots[snapshot_tag]) == constants.NUM_CLIENT:
+        snapshot_print(snapshot_tag)
 
 #pass token
 def handle_token(data):
@@ -173,7 +204,7 @@ def handle_token(data):
         next = random.choice(constants.CONNECTION_GRAPH[self_id])
         print("Sending token to {}".format(next))
         data[2] = str(self_id)
-        soc_send[next].sendall(' '.join(data).encode())
+        send_padded_msg(soc_send[next],' '.join(data))
     has_token = False
     token_string = ""
 
@@ -214,20 +245,21 @@ while run:
             # "ss {#client_num} {#initial_client_num} {#snapshot_id}"
             # "t {token_string}"
             msg_received = x.recv(constants.MESSAGE_SIZE)
-            if len(msg_received != constants.MESSAGE_SIZE):
+            if len(msg_received) != constants.MESSAGE_SIZE:
                 enter_error('Incorrectly padded message received.')
             num_bytes = int(msg_received[:constants.HEADER_SIZE].decode())
-            msg = msg_received[constants.HEADER_SIZE:num_bytes-1].decode()
+            msg = msg_received[constants.HEADER_SIZE:constants.HEADER_SIZE + num_bytes].decode()
             # pad every message such that the first constants.HEADER_SIZE bytes is the number of remaining useful bytes,
             # and it is padded to have constants.MESSAGE_SIZE bytes total. 
 
             if len(msg) >= 8 and msg[:8] == 'snapshot': # completed snapshot
                 client_id = int(msg[9])
-                json_obj = msg[11:]
-                # snapshot_state = pickle.loads(json_obj)
-                # snapshot_tag = snapshot_state.snapshot_tag
-                # local_snapshots[snapshot_tag][client_id] = snapshot_state
-                print("Received completed snapshot from {}".format(client_id))
+                num_bytes_ss = int(msg_received[constants.HEADER_SIZE + num_bytes:2*constants.HEADER_SIZE + num_bytes].decode())
+                json_obj = msg_received[2*constants.HEADER_SIZE + num_bytes:2*constants.HEADER_SIZE + num_bytes + num_bytes_ss]
+                print("Received completed snapshot {} from {}".format(snapshot_tag, client_id))
+                thread = threading.Thread(target=recieved_ss, args=(json_obj,client_id,), daemon=True)
+                thread.start()
+
 
             else:
                 data = msg.split()
@@ -249,6 +281,3 @@ while run:
                 else:
                     enter_error('Received message that is incorrectly formatted.')
                     break
-
-
-
