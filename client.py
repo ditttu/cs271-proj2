@@ -90,14 +90,16 @@ class SnapshotState:
     def __init__(self, snapshot_tag):
         self.snapshot_tag = snapshot_tag
         if has_token:
-            self.state = token_string
+            self.token = token_string
         else:
-            self.state = ""
+            self.token = ""
+        self.snapshot_d = snapshot_dict.copy()
         self.incoming_channels = {str(key): [] for key in constants.INCOMING_GRAPH[self_id]} # state of incoming channels
         self.record_channels = {str(key): True for key in constants.INCOMING_GRAPH[self_id]} # currently recoding incoming channels
     def print_ss(self):
         print("SS tag: {}".format(self.snapshot_tag))
-        print("SS state: {}".format(self.state))
+        print("SS token: {}".format(self.token))
+        print("SS dict:", self.snapshot_d)
         print("SS incoming channels: {}".format(self.incoming_channels))
         print("SS record channels: {}".format(self.record_channels))
     def to_string(self):
@@ -113,6 +115,9 @@ class SnapshotState:
 def snapshot_initiate(data):
     time.sleep(constants.MESSAGE_DELAY)
     global snapshot_dict
+    for key in snapshot_dict:
+        if snapshot_dict[key].record_channels[data[1]]:
+            snapshot_dict[key].incoming_channels[data[1]].append(data)
     sender_id, initiator_id, snapshot_id = data[1:4]
     snapshot_tag = (int(initiator_id), int(snapshot_id))
     if snapshot_tag in snapshot_dict: 
@@ -134,6 +139,9 @@ def snapshot_initiate(data):
 def snapshot_continue(data):
     time.sleep(constants.MESSAGE_DELAY)
     global snapshot_dict
+    for key in snapshot_dict:
+        if snapshot_dict[key].record_channels[data[1]]:
+            snapshot_dict[key].incoming_channels[data[1]].append(data)
     sender_id, initiator_id, snapshot_id = data[1:4]
     snapshot_tag = (int(initiator_id), int(snapshot_id))
     if snapshot_tag not in snapshot_dict: 
